@@ -1142,6 +1142,17 @@ lua_class_t client_class;
  */
 
 /**
+ * The client's input shape as set by the program as a (native) cairo surface.
+ *
+ * **Signal:**
+ *
+ *  * *property::shape\_client\_input*
+ *
+ * @property client_shape_input
+ * @param surface
+ */
+
+/**
  * The FreeDesktop StartId.
  *
  * When a client is spawned (like using a terminal or `awful.spawn`, a startup
