@@ -355,11 +355,13 @@ function ewmh.merge_maximization(c, context, hints)
         c._delay_maximization = function()
             -- This ignores unlikely corner cases like mismatching toggles.
             -- That's likely to be an accident anyway.
-            if c._delayed_max_h and c._delayed_max_v then
+            if c._delayed_max_h ~= nil and c._delayed_max_v ~= nil then
                 c.maximized = c._delayed_max_h or c._delayed_max_v
-            elseif c._delayed_max_h then
+	    end
+            if c._delayed_max_h ~= nil then
                 c.maximized_horizontal = c._delayed_max_h
-            elseif c._delayed_max_v then
+	    end
+            if c._delayed_max_v ~= nil then
                 c.maximized_vertical = c._delayed_max_v
             end
         end
