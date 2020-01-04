@@ -377,7 +377,7 @@ xwindow_shape_pixmap(int width, int height, cairo_surface_t *surf)
 
 /** Set one of a window's shapes */
 void
-xwindow_set_shape(xcb_window_t win, int width, int height, enum xcb_shape_sk_t kind, cairo_surface_t *surf, int offset)
+xwindow_set_shape(xcb_window_t win, int width, int height, enum xcb_shape_sk_t kind, cairo_surface_t *surf, int offset_x, int offset_y)
 {
     if (!globalconf.have_shape)
         return;
@@ -388,7 +388,7 @@ xwindow_set_shape(xcb_window_t win, int width, int height, enum xcb_shape_sk_t k
     if (surf)
         pixmap = xwindow_shape_pixmap(width, height, surf);
 
-    xcb_shape_mask(globalconf.connection, XCB_SHAPE_SO_SET, kind, win, offset, offset, pixmap);
+    xcb_shape_mask(globalconf.connection, XCB_SHAPE_SO_SET, kind, win, offset_x, offset_y, pixmap);
 
     if (pixmap != XCB_NONE)
         xcb_free_pixmap(globalconf.connection, pixmap);
