@@ -1984,12 +1984,10 @@ client_geometry_refresh(void)
                             c->titlebar[CLIENT_TITLEBAR_TOP].size -
                             c->titlebar[CLIENT_TITLEBAR_BOTTOM].size);
 
-            real_geometry.x = c->titlebar[CLIENT_TITLEBAR_LEFT].size;
-            real_geometry.y = c->titlebar[CLIENT_TITLEBAR_TOP].size;
-            real_geometry.width -= c->titlebar[CLIENT_TITLEBAR_LEFT].size;
-            real_geometry.width -= c->titlebar[CLIENT_TITLEBAR_RIGHT].size;
-            real_geometry.height -= c->titlebar[CLIENT_TITLEBAR_TOP].size;
-            real_geometry.height -= c->titlebar[CLIENT_TITLEBAR_BOTTOM].size;
+            real_geometry.x = c->titlebar[CLIENT_TITLEBAR_LEFT].size - c->titlebar[CLIENT_TITLEBAR_LEFT].overlap;
+            real_geometry.y = c->titlebar[CLIENT_TITLEBAR_TOP].size - c->titlebar[CLIENT_TITLEBAR_LEFT].overlap;
+            real_geometry.width -= real_geometry.x + c->titlebar[CLIENT_TITLEBAR_RIGHT].size - c->titlebar[CLIENT_TITLEBAR_RIGHT].overlap;
+            real_geometry.height -= real_geometry.y + c->titlebar[CLIENT_TITLEBAR_BOTTOM].size - c->titlebar[CLIENT_TITLEBAR_BOTTOM].overlap;
 
             if (real_geometry.width == 0 || real_geometry.height == 0)
                 warn("Resizing a window to size zero!?");
@@ -2168,6 +2166,21 @@ client_manage(xcb_window_t w, xcb_get_geometry_reply_t *wgeom, xcb_get_window_at
                           XCB_GRAVITY_NORTH_WEST,
                           1,
                           FRAME_SELECT_INPUT_EVENT_MASK,
+                          globalconf.default_cmap
+                      });
+    c->container_window = xcb_generate_id(globalconf.connection);
+    xcb_create_window(globalconf.connection, globalconf.default_depth, c->container_window, c->frame_window,
+                      0, 0, wgeom->width, wgeom->height,
+                      0, XCB_COPY_FROM_PARENT, globalconf.visual->visual_id,
+                      XCB_CW_BORDER_PIXEL | XCB_CW_BIT_GRAVITY | XCB_CW_WIN_GRAVITY
+                      | XCB_CW_OVERRIDE_REDIRECT | XCB_CW_EVENT_MASK | XCB_CW_COLORMAP,
+                      (const uint32_t [])
+                      {
+                          globalconf.screen->black_pixel,
+                          XCB_GRAVITY_NORTH_WEST,
+                          XCB_GRAVITY_NORTH_WEST,
+                          0,
+                          0,
                           globalconf.default_cmap
                       });
 
@@ -3041,6 +3054,7 @@ client_unmanage(client_t *c, client_unmanage_t reason)
 
     if (c->nofocus_window != XCB_NONE)
         window_array_append(&globalconf.destroy_later_windows, c->nofocus_window);
+    window_array_append(&globalconf.destroy_later_windows, c->container_window);
     window_array_append(&globalconf.destroy_later_windows, c->frame_window);
 
     if(reason != CLIENT_UNMANAGE_DESTROYED)
@@ -3615,20 +3629,26 @@ titlebar_get_drawable(lua_State *L, client_t *c, int cl_idx, client_titlebar_t b
 }
 
 static void
-titlebar_resize(lua_State *L, int cidx, client_t *c, client_titlebar_t bar, int size)
+titlebar_resize(lua_State *L, int cidx, client_t *c, client_titlebar_t bar, int size, int overlap)
 {
     const char *property_name;
 
     if (size < 0)
         return;
 
-    if (size == c->titlebar[bar].size)
+    if (overlap < 0)
+        overlap = 0;
+    else if (overlap > size)
+        overlap = size;
+
+    if (size == c->titlebar[bar].size &&
+        overlap == c->titlebar[bar].overlap)
         return;
 
     /* Now resize the client (and titlebars!) suitably (the client without
      * titlebars should keep its current size!) */
     area_t geometry = c->geometry;
-    int change = size - c->titlebar[bar].size;
+    int change = size - overlap - c->titlebar[bar].size + c->titlebar[bar].overlap;
     int16_t diff_top = 0, diff_bottom = 0, diff_right = 0, diff_left = 0;
     switch (bar) {
     case CLIENT_TITLEBAR_TOP:
@@ -3664,28 +3684,43 @@ titlebar_resize(lua_State *L, int cidx, client_t *c, client_titlebar_t bar, int 
     }
 
     c->titlebar[bar].size = size;
+    c->titlebar[bar].overlap = overlap;
     client_resize_do(c, geometry);
 
     luaA_object_emit_signal(L, cidx, property_name, 0);
 }
 
-#define HANDLE_TITLEBAR(name, index)                              \
-static int                                                        \
-luaA_client_titlebar_ ## name(lua_State *L)                       \
-{                                                                 \
-    client_t *c = luaA_checkudata(L, 1, &client_class);           \
-                                                                  \
-    if (lua_gettop(L) == 2)                                       \
-    {                                                             \
-        if (lua_isnil(L, 2))                                      \
-            titlebar_resize(L, 1, c, index, 0);                   \
-        else                                                      \
-            titlebar_resize(L, 1, c, index, ceil(luaA_checknumber_range(L, 2, 0, MAX_X11_SIZE))); \
-    }                                                             \
-                                                                  \
+#define HANDLE_TITLEBAR(name, index)                                    \
+static int                                                              \
+luaA_client_titlebar_ ## name(lua_State *L)                             \
+{                                                                       \
+    client_t *c = luaA_checkudata(L, 1, &client_class);                 \
+    bool to_resize = false;                                             \
+    uint16_t size, overlap;                                             \
+    if (lua_gettop(L) >= 2) {                                           \
+        to_resize = true;                                               \
+        if (lua_isnil(L, 2))                                            \
+            size = 0;                                                   \
+        else                                                            \
+            size = ceil(luaA_checknumber_range(L, 2, 0, MAX_X11_SIZE)); \
+    }                                                                   \
+    if (lua_gettop(L) >= 3) {                                           \
+        if (lua_isnil(L, 3))                                            \
+            overlap = 0;                                                \
+        else                                                            \
+            overlap = ceil(luaA_checknumber_range(L, 3, 0, MAX_X11_SIZE)); \
+    }                                                                   \
+    else                                                                \
+    {                                                                   \
+        overlap = c->titlebar[index].overlap;                           \
+    }                                                                   \
+    if (to_resize)                                                      \
+         titlebar_resize(L, 1, c, index, size, overlap);                \
+                                                                        \
     luaA_object_push_item(L, 1, titlebar_get_drawable(L, c, 1, index)); \
-    lua_pushinteger(L, c->titlebar[index].size);                   \
-    return 2;                                                     \
+    lua_pushinteger(L, c->titlebar[index].size);                        \
+    lua_pushinteger(L, c->titlebar[index].overlap);                     \
+    return 3;                                                           \
 }
 HANDLE_TITLEBAR(top, CLIENT_TITLEBAR_TOP)
 HANDLE_TITLEBAR(right, CLIENT_TITLEBAR_RIGHT)
