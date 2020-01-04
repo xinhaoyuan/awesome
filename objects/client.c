@@ -1985,9 +1985,11 @@ client_geometry_refresh(void)
                             c->titlebar[CLIENT_TITLEBAR_BOTTOM].size);
 
             real_geometry.x = c->titlebar[CLIENT_TITLEBAR_LEFT].size - c->titlebar[CLIENT_TITLEBAR_LEFT].overlap;
-            real_geometry.y = c->titlebar[CLIENT_TITLEBAR_TOP].size - c->titlebar[CLIENT_TITLEBAR_LEFT].overlap;
-            real_geometry.width -= real_geometry.x + c->titlebar[CLIENT_TITLEBAR_RIGHT].size - c->titlebar[CLIENT_TITLEBAR_RIGHT].overlap;
-            real_geometry.height -= real_geometry.y + c->titlebar[CLIENT_TITLEBAR_BOTTOM].size - c->titlebar[CLIENT_TITLEBAR_BOTTOM].overlap;
+            real_geometry.y = c->titlebar[CLIENT_TITLEBAR_TOP].size - c->titlebar[CLIENT_TITLEBAR_TOP].overlap;
+            real_geometry.width -= c->titlebar[CLIENT_TITLEBAR_LEFT].size - c->titlebar[CLIENT_TITLEBAR_LEFT].overlap;
+            real_geometry.width -= c->titlebar[CLIENT_TITLEBAR_RIGHT].size - c->titlebar[CLIENT_TITLEBAR_RIGHT].overlap;
+            real_geometry.height -= c->titlebar[CLIENT_TITLEBAR_TOP].size - c->titlebar[CLIENT_TITLEBAR_TOP].overlap;
+            real_geometry.height -= c->titlebar[CLIENT_TITLEBAR_BOTTOM].size - c->titlebar[CLIENT_TITLEBAR_BOTTOM].overlap;
 
             if (real_geometry.width == 0 || real_geometry.height == 0)
                 warn("Resizing a window to size zero!?");
@@ -2015,9 +2017,12 @@ client_geometry_refresh(void)
         xcb_configure_window(globalconf.connection, c->frame_window,
                 XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
                 (uint32_t[]) { geometry.x, geometry.y, geometry.width, geometry.height });
-        xcb_configure_window(globalconf.connection, c->window,
+        xcb_configure_window(globalconf.connection, c->container_window,
                 XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
                 (uint32_t[]) { real_geometry.x, real_geometry.y, real_geometry.width, real_geometry.height });
+        xcb_configure_window(globalconf.connection, c->window,
+                XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
+                (uint32_t[]) { 0, 0, real_geometry.width, real_geometry.height });
 
         c->x11_frame_geometry = geometry;
         c->x11_client_geometry = real_geometry;
@@ -2180,7 +2185,7 @@ client_manage(xcb_window_t w, xcb_get_geometry_reply_t *wgeom, xcb_get_window_at
                           XCB_GRAVITY_NORTH_WEST,
                           XCB_GRAVITY_NORTH_WEST,
                           0,
-                          0,
+                          XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT,
                           globalconf.default_cmap
                       });
 
@@ -2196,8 +2201,9 @@ client_manage(xcb_window_t w, xcb_get_geometry_reply_t *wgeom, xcb_get_window_at
                                  globalconf.screen->root,
                                  XCB_CW_EVENT_MASK,
                                  no_event);
-    reparent_cookie = xcb_reparent_window_checked(globalconf.connection, w, c->frame_window, 0, 0);
+    reparent_cookie = xcb_reparent_window_checked(globalconf.connection, w, c->container_window, 0, 0);
     xcb_map_window(globalconf.connection, w);
+    xcb_map_window(globalconf.connection, c->container_window);
     xcb_change_window_attributes(globalconf.connection,
                                  globalconf.screen->root,
                                  XCB_CW_EVENT_MASK,
@@ -2320,23 +2326,23 @@ client_manage(xcb_window_t w, xcb_get_geometry_reply_t *wgeom, xcb_get_window_at
 static void
 client_remove_titlebar_geometry(client_t *c, area_t *geometry)
 {
-    geometry->x += c->titlebar[CLIENT_TITLEBAR_LEFT].size;
-    geometry->y += c->titlebar[CLIENT_TITLEBAR_TOP].size;
-    geometry->width -= c->titlebar[CLIENT_TITLEBAR_LEFT].size;
-    geometry->width -= c->titlebar[CLIENT_TITLEBAR_RIGHT].size;
-    geometry->height -= c->titlebar[CLIENT_TITLEBAR_TOP].size;
-    geometry->height -= c->titlebar[CLIENT_TITLEBAR_BOTTOM].size;
+    geometry->x += c->titlebar[CLIENT_TITLEBAR_LEFT].size - c->titlebar[CLIENT_TITLEBAR_LEFT].overlap;
+    geometry->y += c->titlebar[CLIENT_TITLEBAR_TOP].size - c->titlebar[CLIENT_TITLEBAR_TOP].overlap;
+    geometry->width -= c->titlebar[CLIENT_TITLEBAR_LEFT].size - c->titlebar[CLIENT_TITLEBAR_LEFT].overlap;
+    geometry->width -= c->titlebar[CLIENT_TITLEBAR_RIGHT].size - c->titlebar[CLIENT_TITLEBAR_RIGHT].overlap;
+    geometry->height -= c->titlebar[CLIENT_TITLEBAR_TOP].size - c->titlebar[CLIENT_TITLEBAR_TOP].overlap;
+    geometry->height -= c->titlebar[CLIENT_TITLEBAR_BOTTOM].size - c->titlebar[CLIENT_TITLEBAR_BOTTOM].overlap;
 }
 
 static void
 client_add_titlebar_geometry(client_t *c, area_t *geometry)
 {
-    geometry->x -= c->titlebar[CLIENT_TITLEBAR_LEFT].size;
-    geometry->y -= c->titlebar[CLIENT_TITLEBAR_TOP].size;
-    geometry->width += c->titlebar[CLIENT_TITLEBAR_LEFT].size;
-    geometry->width += c->titlebar[CLIENT_TITLEBAR_RIGHT].size;
-    geometry->height += c->titlebar[CLIENT_TITLEBAR_TOP].size;
-    geometry->height += c->titlebar[CLIENT_TITLEBAR_BOTTOM].size;
+    geometry->x -= c->titlebar[CLIENT_TITLEBAR_LEFT].size - c->titlebar[CLIENT_TITLEBAR_LEFT].overlap;
+    geometry->y -= c->titlebar[CLIENT_TITLEBAR_TOP].size - c->titlebar[CLIENT_TITLEBAR_TOP].overlap;
+    geometry->width += c->titlebar[CLIENT_TITLEBAR_LEFT].size - c->titlebar[CLIENT_TITLEBAR_LEFT].overlap;
+    geometry->width += c->titlebar[CLIENT_TITLEBAR_RIGHT].size - c->titlebar[CLIENT_TITLEBAR_RIGHT].overlap;
+    geometry->height += c->titlebar[CLIENT_TITLEBAR_TOP].size - c->titlebar[CLIENT_TITLEBAR_TOP].overlap;
+    geometry->height += c->titlebar[CLIENT_TITLEBAR_BOTTOM].size - c->titlebar[CLIENT_TITLEBAR_BOTTOM].overlap;
 }
 
 area_t
@@ -3632,6 +3638,7 @@ static void
 titlebar_resize(lua_State *L, int cidx, client_t *c, client_titlebar_t bar, int size, int overlap)
 {
     const char *property_name;
+    c->titlebar[bar].overlap_requested = overlap;
 
     if (size < 0)
         return;
@@ -3696,26 +3703,21 @@ luaA_client_titlebar_ ## name(lua_State *L)                             \
 {                                                                       \
     client_t *c = luaA_checkudata(L, 1, &client_class);                 \
     bool to_resize = false;                                             \
-    uint16_t size, overlap;                                             \
+    uint16_t size = 0, overlap = c->titlebar[index].overlap_requested;  \
     if (lua_gettop(L) >= 2) {                                           \
         to_resize = true;                                               \
-        if (lua_isnil(L, 2))                                            \
-            size = 0;                                                   \
-        else                                                            \
+        if (!lua_isnil(L, 2))                                           \
             size = ceil(luaA_checknumber_range(L, 2, 0, MAX_X11_SIZE)); \
     }                                                                   \
     if (lua_gettop(L) >= 3) {                                           \
         if (lua_isnil(L, 3))                                            \
-            overlap = 0;                                                \
+            overlap = size == 0 ? 0 : overlap;                          \
         else                                                            \
             overlap = ceil(luaA_checknumber_range(L, 3, 0, MAX_X11_SIZE)); \
     }                                                                   \
-    else                                                                \
-    {                                                                   \
-        overlap = c->titlebar[index].overlap;                           \
+    if (to_resize) {                                                    \
+        titlebar_resize(L, 1, c, index, size, overlap);                 \
     }                                                                   \
-    if (to_resize)                                                      \
-         titlebar_resize(L, 1, c, index, size, overlap);                \
                                                                         \
     luaA_object_push_item(L, 1, titlebar_get_drawable(L, c, 1, index)); \
     lua_pushinteger(L, c->titlebar[index].size);                        \
@@ -4074,8 +4076,10 @@ luaA_client_get_content(lua_State *L, client_t *c)
     int height = c->geometry.height;
 
     /* Just the client size without decorations */
-    width  -= c->titlebar[CLIENT_TITLEBAR_LEFT].size + c->titlebar[CLIENT_TITLEBAR_RIGHT].size;
-    height -= c->titlebar[CLIENT_TITLEBAR_TOP].size + c->titlebar[CLIENT_TITLEBAR_BOTTOM].size;
+    width  -= c->titlebar[CLIENT_TITLEBAR_LEFT].size - c->titlebar[CLIENT_TITLEBAR_LEFT].overlap;
+    width  -=  c->titlebar[CLIENT_TITLEBAR_RIGHT].size - c->titlebar[CLIENT_TITLEBAR_RIGHT].overlap;
+    height -= c->titlebar[CLIENT_TITLEBAR_TOP].size - c->titlebar[CLIENT_TITLEBAR_TOP].overlap;
+    height -= c->titlebar[CLIENT_TITLEBAR_BOTTOM].size - c->titlebar[CLIENT_TITLEBAR_BOTTOM].overlap;
 
     surface = cairo_xcb_surface_create(globalconf.connection, c->window,
                                        c->visualtype, width, height);
@@ -4281,6 +4285,44 @@ luaA_client_get_client_shape_bounding(lua_State *L, client_t *c)
     return 1;
 }
 
+/** Get the client's window container shape.
+ * \param L The Lua VM state.
+ * \param client The client object.
+ * \return The number of elements pushed on stack.
+ */
+static int
+luaA_client_get_container_shape(lua_State *L, client_t *c)
+{
+    cairo_surface_t *surf = xwindow_get_shape(c->container_window, XCB_SHAPE_SK_BOUNDING);
+    if (!surf)
+        return 0;
+    /* lua has to make sure to free the ref or we have a leak */
+    lua_pushlightuserdata(L, surf);
+    return 1;
+}
+
+/** Set the client's window container shape.
+ * \param L The Lua VM state.
+ * \param client The client object.
+ * \return The number of elements pushed on stack.
+ */
+static int
+luaA_client_set_container_shape(lua_State *L, client_t *c)
+{
+    cairo_surface_t *surf = NULL;
+    if(!lua_isnil(L, -1))
+        surf = (cairo_surface_t *)lua_touserdata(L, -1);
+    int offset_x = c->titlebar[CLIENT_TITLEBAR_LEFT].size - c->titlebar[CLIENT_TITLEBAR_LEFT].overlap;
+    int offset_y = c->titlebar[CLIENT_TITLEBAR_TOP].size - c->titlebar[CLIENT_TITLEBAR_TOP].overlap;
+
+    xwindow_set_shape(c->container_window,
+            c->geometry.width,
+            c->geometry.height,
+            XCB_SHAPE_SK_BOUNDING, surf,
+            -offset_x, -offset_y);
+    return 0;
+}
+
 /** Get the client's frame window bounding shape.
  * \param L The Lua VM state.
  * \param client The client object.
@@ -4311,7 +4353,7 @@ luaA_client_set_shape_bounding(lua_State *L, client_t *c)
     xwindow_set_shape(c->frame_window,
             c->geometry.width + (c->border_width * 2),
             c->geometry.height + (c->border_width * 2),
-            XCB_SHAPE_SK_BOUNDING, surf, -c->border_width);
+            XCB_SHAPE_SK_BOUNDING, surf, -c->border_width, -c->border_width);
     luaA_object_emit_signal(L, -3, "property::shape_bounding", 0);
     return 0;
 }
@@ -4360,7 +4402,7 @@ luaA_client_set_shape_clip(lua_State *L, client_t *c)
     if(!lua_isnil(L, -1))
         surf = (cairo_surface_t *)lua_touserdata(L, -1);
     xwindow_set_shape(c->frame_window, c->geometry.width, c->geometry.height,
-            XCB_SHAPE_SK_CLIP, surf, 0);
+                      XCB_SHAPE_SK_CLIP, surf, 0, 0);
     luaA_object_emit_signal(L, -3, "property::shape_clip", 0);
     return 0;
 }
@@ -4411,7 +4453,7 @@ luaA_client_set_shape_input(lua_State *L, client_t *c)
     xwindow_set_shape(c->frame_window,
             c->geometry.width + (c->border_width * 2),
             c->geometry.height + (c->border_width * 2),
-            XCB_SHAPE_SK_INPUT, surf, -c->border_width);
+            XCB_SHAPE_SK_INPUT, surf, -c->border_width, -c->border_width);
     luaA_object_emit_signal(L, -3, "property::shape_input", 0);
     return 0;
 }
@@ -4735,6 +4777,10 @@ client_class_setup(lua_State *L)
                             (lua_class_propfunc_t) luaA_client_set_shape_input,
                             (lua_class_propfunc_t) luaA_client_get_shape_input,
                             (lua_class_propfunc_t) luaA_client_set_shape_input);
+    luaA_class_add_property(&client_class, "client_container_shape",
+                            (lua_class_propfunc_t) luaA_client_set_container_shape,
+                            (lua_class_propfunc_t) luaA_client_get_container_shape,
+                            (lua_class_propfunc_t) luaA_client_set_container_shape);
     luaA_class_add_property(&client_class, "startup_id",
                             (lua_class_propfunc_t) luaA_client_set_startup_id,
                             (lua_class_propfunc_t) luaA_client_get_startup_id,
