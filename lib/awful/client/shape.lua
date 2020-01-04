@@ -9,6 +9,7 @@
 -- Grab environment we need
 local surface = require("gears.surface")
 local cairo = require("lgi").cairo
+local gtimer = require("gears.timer")
 local capi =
 {
     client = client,
@@ -32,10 +33,15 @@ function shape.get_transformed(c, shape_name)
 
     -- Get information about various sizes on the client
     local geom = c:geometry()
-    local _, t = c:titlebar_top()
-    local _, b = c:titlebar_bottom()
-    local _, l = c:titlebar_left()
-    local _, r = c:titlebar_right()
+    local _, t, to = c:titlebar_top()
+    local _, b, bo = c:titlebar_bottom()
+    local _, l, lo = c:titlebar_left()
+    local _, r, ro = c:titlebar_right()
+
+    t = t - to
+    b = b - bo
+    l = l - lo
+    r = r - ro
 
     -- Figure out the size of the shape that we need
     local img_width = geom.width + 2*border
@@ -137,11 +143,23 @@ function shape.update.input(c)
     end
 end
 
-capi.client.connect_signal("property::shape_client_bounding", shape.update.bounding)
-capi.client.connect_signal("property::shape_client_clip", shape.update.clip)
-capi.client.connect_signal("property::shape_client_input", function (c) c.has_client_input_shape = true; shape.update.input(c) end)
-capi.client.connect_signal("property::size", shape.update.all)
-capi.client.connect_signal("property::border_width", shape.update.all)
+local function schedule(c, f)
+    if c.callback_scheduled == nil then c.callback_scheduled = {} end
+    if c.callback_scheduled[f] then
+        return
+    end
+    c.callback_scheduled[f] = true
+    gtimer.delayed_call(function ()
+            c.callback_scheduled[f] = nil
+            f(c)
+    end)
+end
+
+capi.client.connect_signal("property::shape_client_bounding", function (c) schedule(c, shape.update.bounding) end)
+capi.client.connect_signal("property::shape_client_clip", function (c) schedule(c, shape.update.clip) end)
+capi.client.connect_signal("property::shape_client_input", function (c) c.has_client_input_shape = true; schedule(c, shape.update.input) end)
+capi.client.connect_signal("property::size", function (c) schedule(c, shape.update.all) end)
+capi.client.connect_signal("property::border_width", function (c) schedule(c, shape.update.all) end)
 
 return shape
 
