@@ -343,10 +343,14 @@ event_handle_configurerequest(xcb_configure_request_event_t *ev)
 
         area_t geometry = c->geometry;
         uint16_t bw = c->border_width;
-        uint16_t tb_left = c->titlebar[CLIENT_TITLEBAR_LEFT].size;
-        uint16_t tb_right = c->titlebar[CLIENT_TITLEBAR_RIGHT].size;
-        uint16_t tb_top = c->titlebar[CLIENT_TITLEBAR_TOP].size;
-        uint16_t tb_bottom = c->titlebar[CLIENT_TITLEBAR_BOTTOM].size;
+        uint16_t tb_left = c->titlebar[CLIENT_TITLEBAR_LEFT].size -
+            c->titlebar[CLIENT_TITLEBAR_LEFT].overlap;
+        uint16_t tb_right = c->titlebar[CLIENT_TITLEBAR_RIGHT].size -
+            c->titlebar[CLIENT_TITLEBAR_RIGHT].overlap;
+        uint16_t tb_top = c->titlebar[CLIENT_TITLEBAR_TOP].size -
+            c->titlebar[CLIENT_TITLEBAR_TOP].overlap;
+        uint16_t tb_bottom = c->titlebar[CLIENT_TITLEBAR_BOTTOM].size -
+            c->titlebar[CLIENT_TITLEBAR_BOTTOM].overlap;
         uint16_t deco_left = bw + tb_left;
         uint16_t deco_right = bw + tb_right;
         uint16_t deco_top = bw + tb_top;
