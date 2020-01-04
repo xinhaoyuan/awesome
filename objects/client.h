@@ -190,6 +190,8 @@ struct client_t
     struct {
         /** The size of this bar. */
         uint16_t size;
+        /** The size of this bar that is in the client's area. */
+        uint16_t overlap;
         /** The drawable for this bar. */
         drawable_t *drawable;
     } titlebar[CLIENT_TITLEBAR_COUNT];
