@@ -136,6 +136,18 @@ event_handle_mousegrabber(int x, int y, uint16_t mask)
     return false;
 }
 
+/* Push the button event's info into the stack, and return the number of data pushed. */
+static int
+push_button_event(lua_State *L, xcb_button_press_event_t *ev)
+{
+    lua_pushinteger(L, ev->event_x);
+    lua_pushinteger(L, ev->event_y);
+    lua_pushinteger(L, ev->detail);
+    luaA_pushmodifiers(L, ev->state);
+
+    return 4;
+}
+
 /** Emit a button signal.
  * The top of the lua stack has to be the object on which to emit the event.
  * \param L The Lua VM state.
@@ -157,13 +169,27 @@ event_emit_button(lua_State *L, xcb_button_press_event_t *ev)
         fatal("Invalid event type");
     }
 
-    /* Push the event's info */
-    lua_pushinteger(L, ev->event_x);
-    lua_pushinteger(L, ev->event_y);
-    lua_pushinteger(L, ev->detail);
-    luaA_pushmodifiers(L, ev->state);
+    int n = push_button_event(L, ev);
     /* And emit the signal */
-    luaA_object_emit_signal(L, -5, name, 4);
+    luaA_object_emit_signal(L, -n - 1, name, n);
+}
+
+static void
+event_emit_root_button(lua_State *L, xcb_button_press_event_t *ev) {
+    const char *name;
+    switch(XCB_EVENT_RESPONSE_TYPE(ev))
+    {
+    case XCB_BUTTON_PRESS:
+        name = "root_button::press";
+        break;
+    case XCB_BUTTON_RELEASE:
+        name = "root_button::release";
+        break;
+    default:
+        fatal("Invalid event type");
+    }
+    int n = push_button_event(L, ev);
+    signal_object_emit(L, &global_signals, name, n);
 }
 
 /** The button press event handler.
@@ -272,6 +298,7 @@ event_handle_button(xcb_button_press_event_t *ev)
     else if(ev->child == XCB_NONE)
         if(globalconf.screen->root == ev->event)
         {
+            event_emit_root_button(L, ev);
             event_button_callback(ev, &globalconf.buttons, L, 0, 0, NULL);
             return;
         }
