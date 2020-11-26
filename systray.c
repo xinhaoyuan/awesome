@@ -413,4 +413,51 @@ luaA_systray(lua_State *L)
     return 2;
 }
 
+/** List the low-level info of the embedded windows.
+ * The definition of `info` is subject to change.
+ * \param L The Lua VM state.
+ * \return the number of element returned. (1)
+ * \luastack The array of window info, ordered as in the systray.
+ */
+int
+luaA_systray_list(lua_State *L)
+{
+    int count = 0;
+    lua_newtable(L);
+    foreach(em, globalconf.embedded) {
+        if (em->info.flags & XEMBED_MAPPED) {
+            xcb_get_property_cookie_t cookie = xcb_get_property(
+                globalconf.connection, false, em->win,
+                XCB_ATOM_WM_NAME, XCB_GET_PROPERTY_TYPE_ANY,
+                0, UINT_MAX);
+            xcb_get_property_reply_t* reply =
+                xcb_get_property_reply(globalconf.connection, cookie, NULL);
+            char* name = xutil_get_text_property_from_reply(reply);
+            p_delete(&reply);
+
+            if (name == NULL) {
+                cookie = xcb_get_property(
+                    globalconf.connection, false, em->win,
+                    _NET_WM_NAME, XCB_GET_PROPERTY_TYPE_ANY,
+                    0, UINT_MAX);
+                reply =
+                    xcb_get_property_reply(globalconf.connection, cookie, NULL);
+                name = xutil_get_text_property_from_reply(reply);
+                p_delete(&reply);
+            }
+
+            lua_createtable(L, 2, 0);
+            lua_pushinteger(L, em->win);
+            lua_rawseti(L, -2, 1);
+            lua_pushstring(L, name);
+            lua_rawseti(L, -2, 2);
+            p_delete(&name);
+
+            lua_rawseti(L, -2, ++count);
+        }
+    }
+    return 1;
+}
+
+
 // vim: filetype=c:expandtab:shiftwidth=4:tabstop=8:softtabstop=4:textwidth=80
