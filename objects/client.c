@@ -2350,10 +2350,10 @@ client_get_undecorated_geometry(client_t *c)
 {
     area_t geometry = c->geometry;
     if (!c->fullscreen) {
-        int diff_left = c->titlebar[CLIENT_TITLEBAR_LEFT].size;
-        int diff_right = c->titlebar[CLIENT_TITLEBAR_RIGHT].size;
-        int diff_top = c->titlebar[CLIENT_TITLEBAR_TOP].size;
-        int diff_bottom = c->titlebar[CLIENT_TITLEBAR_BOTTOM].size;
+        int diff_left = c->titlebar[CLIENT_TITLEBAR_LEFT].size - c->titlebar[CLIENT_TITLEBAR_LEFT].overlap;
+        int diff_right = c->titlebar[CLIENT_TITLEBAR_RIGHT].size - c->titlebar[CLIENT_TITLEBAR_RIGHT].overlap;
+        int diff_top = c->titlebar[CLIENT_TITLEBAR_TOP].size - c->titlebar[CLIENT_TITLEBAR_TOP].overlap;
+        int diff_bottom = c->titlebar[CLIENT_TITLEBAR_BOTTOM].size - c->titlebar[CLIENT_TITLEBAR_BOTTOM].overlap;
         geometry.width -= diff_left + diff_right;
         geometry.height -= diff_top + diff_bottom;
         if (c->size_hints.flags & XCB_ICCCM_SIZE_HINT_P_WIN_GRAVITY) {
