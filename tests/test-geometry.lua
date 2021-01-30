@@ -6,9 +6,13 @@ local wibox     = require( "wibox"     )
 local beautiful = require( "beautiful" )
 local cruled = require("ruled.client")
 local gdebug = require("gears.debug")
+local test_client = require("_client")
+local lgi = require("lgi")
+local gears = require("gears")
 
 local w = nil
 local w1_draw, w2_draw
+local windowid
 
 -- Replacing the rules is not supported anymore.
 local dep = gdebug.deprecate
@@ -257,6 +261,135 @@ local steps = {
     end
 }
 
-runner.run_steps(steps)
+print("Added tests for unmanaged client geometries.")
+-- By default titlebar size depends on system font rendering. Make it a fixed value.
+local fix_titlebar_size = function(c) c:titlebar_top(20) end
+local test_data = {
+    -- gravity => expectation of unmanaged x, y, w, h.
+    ["NORTH_WEST"] = {0,  0,  100, 80},
+    ["NORTH"] =      {10, 0,  100, 80},
+    ["NORTH_EAST"] = {20, 0,  100, 80},
+    ["WEST"] =       {0,  20, 100, 80},
+    ["CENTER"] =     {10, 20, 100, 80},
+    ["EAST"] =       {20, 20, 100, 80},
+    ["SOUTH_WEST"] = {0,  40, 100, 80},
+    ["SOUTH"] =      {10, 40, 100, 80},
+    ["SOUTH_EAST"] = {20, 40, 100, 80},
+    ["STATIC"] =     {10, 30, 100, 80}
+}
+for gravity, expectation in pairs(test_data) do
+    gears.table.merge(steps, {
+        function()
+            set_rules {
+                -- All clients will match this rule.
+                { rule = { },properties = {
+                      titlebars_enabled = true,
+                      border_width      = 10,
+                      border_color      = "#00ff00",
+                      size_hints_honor  = false,
+                      x                 = 0,
+                      y                 = 0,
+                      width             = 100,
+                      height            = 100
+                }}
+            }
+            client.connect_signal("request::titlebars", fix_titlebar_size)
+            -- Wait for the previous cleanup to be done
+            if #client.get() == 0 then
+                return true
+            end
+        end,
+        function(count)
+            if count == 1 then
+                print("testing gravity " .. gravity)
+                test_client(nil,nil,nil,nil,nil,{gravity=lgi.Gdk.Gravity[gravity]})
+            else
+                local c = client.get()[1]
+                if c then
+                    assert(c.size_hints.win_gravity == gravity:lower())
+                    assert(c.border_width      == 10  )
+                    assert(c:geometry().x      == 0   )
+                    assert(c:geometry().y      == 0   )
+                    assert(c:geometry().width  == 100 )
+                    assert(c:geometry().height == 100 )
+                    windowid = c.window
+                    c:unmanage()
+                    awesome.sync()
+                    return true
+                end
+            end
+        end,
+        function()
+            local Gdk= lgi.Gdk
+            local GdkX11= lgi.GdkX11
+            local display = Gdk.Display.open(os.getenv("DISPLAY"))
+            local window = GdkX11.X11Window.foreign_new_for_display(display, windowid)
+            local x, y, w, h = window:get_geometry()
+            print(gravity, x, y, w, h)
+            assert(x == expectation[1])
+            assert(y == expectation[2])
+            assert(w == expectation[3])
+            assert(h == expectation[4])
+            window:destroy()
+            return true
+        end,
+        function()
+            local Gdk= lgi.Gdk
+            local GdkX11= lgi.GdkX11
+            local display = Gdk.Display.open(os.getenv("DISPLAY"))
+            local window = GdkX11.X11Window.foreign_new_for_display(display, windowid)
+            if window then return end
+            return true
+        end,
+        function()
+            set_rules {
+                { rule = { },properties = {
+                      titlebars_enabled = false,
+                      border_width      = 0,
+                      border_color      = "#00ff00",
+                      size_hints_honor  = false,
+                      x                 = expectation[1],
+                      y                 = expectation[2],
+                      width             = expectation[3],
+                      height            = expectation[4]
+                }}
+            }
+            return true
+        end,
+        -- Additionally, checks our expectations are correct by adding decoration back.
+        function(count)
+            if count == 1 then
+                test_client(nil,nil,nil,nil,nil,{gravity=lgi.Gdk.Gravity[gravity]})
+            else
+                local c = client.get()[1]
+                if c then
+                    local geo = c:geometry()
+                    assert(c.size_hints.win_gravity == gravity:lower())
+                    assert(c.border_width      == 0  )
+                    assert(c:geometry().x      == expectation[1] )
+                    assert(c:geometry().y      == expectation[2] )
+                    assert(c:geometry().width  == expectation[3] )
+                    assert(c:geometry().height == expectation[4] )
+                    c:emit_signal("request::titlebars")
+                    c.border_width = 10
+                    return true
+                end
+            end
+        end,
+        function()
+            local c = client.get()[1]
+            local geo = c:geometry()
+            assert(c.border_width      == 10  )
+            assert(c:geometry().x      == 0   )
+            assert(c:geometry().y      == 0   )
+            assert(c:geometry().height == 100 )
+            assert(c:geometry().width  == 100 )
+            c:kill()
+            client.disconnect_signal("request::titlebars", fix_titlebar_size)
+            return true
+        end,
+    })
+end
 
+runner.run_steps(steps)
 -- vim: filetype=lua:expandtab:shiftwidth=4:tabstop=8:softtabstop=4:textwidth=80
