@@ -10,7 +10,8 @@ local drawable = {}
 local capi = {
     awesome = awesome,
     root = root,
-    screen = screen
+    screen = screen,
+    mouse = mouse,
 }
 local beautiful = require("beautiful")
 local base = require("wibox.widget.base")
@@ -76,7 +77,9 @@ local function do_redraw(self)
     local context = get_widget_context(self)
 
     -- Relayout
-    if self._need_relayout or self._need_complete_repaint then
+    local mouse_move_emitted = false
+    local mouse_pos = capi.mouse.coords()
+    while self._need_relayout or self._need_complete_repaint do
         self._need_relayout = false
         if self._widget_hierarchy and self._widget then
             local had_systray = systray_widget and self._widget_hierarchy:get_count(systray_widget) > 0
@@ -104,6 +107,11 @@ local function do_redraw(self)
             self._dirty_area:union_rectangle(cairo.RectangleInt{
                 x = 0, y = 0, width = width, height = height
             })
+        end
+
+        if not mouse_move_emitted and self._has_mouse then
+            mouse_move_emitted = true
+            self.drawable:emit_signal("mouse::move", mouse_pos.x - geom.x, mouse_pos.y - geom.y)
         end
     end
 
@@ -334,6 +342,7 @@ end
 local function handle_leave(self)
     emit_difference("mouse::leave", self._widgets_under_mouse, {})
     self._widgets_under_mouse = {}
+    self._has_mouse = false
 end
 
 local function handle_motion(self, x, y)
@@ -342,6 +351,7 @@ local function handle_motion(self, x, y)
     if x < 0 or y < 0 or x > dgeo.width or y > dgeo.height then
         return handle_leave(self)
     end
+    self._has_mouse = true
 
     -- Build a plain list of all widgets on that point
     local widgets_list = self:find_widgets(x, y)
@@ -442,6 +452,7 @@ function drawable.new(d, widget_context_skeleton, drawable_name)
     button_signal("button::press")
     button_signal("button::release")
 
+    d:connect_signal("mouse::enter", function() ret._has_mouse = true end)
     d:connect_signal("mouse::move", function(_, x, y) handle_motion(ret, x, y) end)
     d:connect_signal("mouse::leave", function() handle_leave(ret) end)
 
