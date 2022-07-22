@@ -1059,6 +1059,16 @@ event_handle_selectionclear(xcb_selection_clear_event_t *ev)
 
 static void
 event_handle_damage_notify(xcb_damage_notify_event_t *ev) {
+    client_t *client;
+    if ((client = client_getbywin(ev->drawable)) && client->composite_cb) {
+        client_refresh_partial(
+            client,
+            ev->area.x + client->titlebar[CLIENT_TITLEBAR_LEFT].size - client->titlebar[CLIENT_TITLEBAR_LEFT].overlap,
+            ev->area.y + client->titlebar[CLIENT_TITLEBAR_TOP].size - client->titlebar[CLIENT_TITLEBAR_TOP].overlap,
+            ev->area.width, ev->area.height);
+        if (ev->damage == client->damage)
+            xcb_damage_subtract(globalconf.connection, ev->damage, None, None);
+    }
     if (ev->drawable == globalconf.systray.window) {
         luaA_systray_invalidate();
         xcb_damage_subtract(globalconf.connection, ev->damage, None, None);

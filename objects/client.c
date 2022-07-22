@@ -103,6 +103,7 @@
 
 #include <xcb/xcb_atom.h>
 #include <xcb/shape.h>
+#include <xcb/composite.h>
 #include <cairo-xcb.h>
 
 lua_class_t client_class;
@@ -2188,6 +2189,8 @@ client_manage(xcb_window_t w, xcb_get_geometry_reply_t *wgeom, xcb_get_window_at
                           XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT,
                           globalconf.default_cmap
                       });
+    c->composite_cb = NULL;
+    c->damage = XCB_NONE;
 
     /* The client may already be mapped, thus we must be sure that we don't send
      * ourselves an UnmapNotify due to the xcb_reparent_window().
@@ -3036,6 +3039,15 @@ client_unmanage(client_t *c, client_unmanage_t reason)
         lua_pop(L, 1);
     }
 
+    if (c->composite_cb) {
+        luaA_object_unref(L, c->composite_cb);
+        c->composite_cb = NULL;
+        if (reason != CLIENT_UNMANAGE_DESTROYED &&
+            reason != CLIENT_UNMANAGE_UNMAP)
+            xcb_damage_destroy(globalconf.connection, c->damage);
+        c->damage = XCB_NONE;
+    }
+
     /* Clear our event mask so that we don't receive any events from now on,
      * especially not for the following requests. */
     if(reason != CLIENT_UNMANAGE_DESTROYED)
@@ -3562,6 +3574,26 @@ client_get_drawable(client_t *c, int x, int y)
     return client_get_drawable_offset(c, &x, &y);
 }
 
+static int
+area_intersect(area_t *area, const area_t *intersect_with) {
+    int sx = area->x;
+    int sy = area->y;
+    int ex = area->x + area->width;
+    int ey = area->y + area->height;
+    if (AREA_LEFT(*intersect_with) >= ex || AREA_RIGHT(*intersect_with) <= sx) return 0;
+    if (AREA_TOP(*intersect_with) >= ey || AREA_BOTTOM(*intersect_with) <= sy) return 0;
+    if (AREA_LEFT(*intersect_with) >= sx) sx = AREA_LEFT(*intersect_with);
+    if (AREA_RIGHT(*intersect_with) <= ex) ex = AREA_RIGHT(*intersect_with);
+    if (AREA_TOP(*intersect_with) >= sy) sy = AREA_TOP(*intersect_with);
+    if (AREA_BOTTOM(*intersect_with) <= ey) ey = AREA_BOTTOM(*intersect_with);
+    if (sx == ex || sy == ey) return 0;
+    area->x = sx;
+    area->y = sy;
+    area->width = ex - sx;
+    area->height = ey - sy;
+    return 1;
+}
+
 static void
 client_refresh_titlebar_partial(client_t *c, client_titlebar_t bar, int16_t x, int16_t y, uint16_t width, uint16_t height)
 {
@@ -3572,15 +3604,18 @@ client_refresh_titlebar_partial(client_t *c, client_titlebar_t bar, int16_t x, i
 
     /* Is the titlebar part of the area that should get redrawn? */
     area_t area = titlebar_get_area(c, bar);
-    if (AREA_LEFT(area) >= x + width || AREA_RIGHT(area) <= x)
-        return;
-    if (AREA_TOP(area) >= y + height || AREA_BOTTOM(area) <= y)
-        return;
+    area_t dirty_area = { .x = x, .y = y, .width = width, .height = height };
+    if (!area_intersect(&dirty_area, &area)) return;
 
-    /* Redraw the affected parts */
-    cairo_surface_flush(c->titlebar[bar].drawable->surface);
-    xcb_copy_area(globalconf.connection, c->titlebar[bar].drawable->pixmap, c->frame_window,
-            globalconf.gc, x - area.x, y - area.y, x, y, width, height);
+    if (c->composite_cb) {
+        xcb_clear_area(globalconf.connection, true, c->frame_window, dirty_area.x, dirty_area.y, dirty_area.width, dirty_area.height);
+    } else {
+        /* Redraw the affected parts */
+        cairo_surface_flush(c->titlebar[bar].drawable->surface);
+        xcb_copy_area(globalconf.connection, c->titlebar[bar].drawable->pixmap, c->frame_window,
+            globalconf.gc, dirty_area.x - area.x, dirty_area.y - area.y,
+            dirty_area.x, dirty_area.y, dirty_area.width, dirty_area.height);
+    }
 }
 
 #define HANDLE_TITLEBAR_REFRESH(name, index)                                                \
@@ -3595,14 +3630,89 @@ HANDLE_TITLEBAR_REFRESH(right, CLIENT_TITLEBAR_RIGHT)
 HANDLE_TITLEBAR_REFRESH(bottom, CLIENT_TITLEBAR_BOTTOM)
 HANDLE_TITLEBAR_REFRESH(left, CLIENT_TITLEBAR_LEFT)
 
+
+static void
+client_composite_titlebar_partial(client_t *c, client_titlebar_t bar, int16_t x, int16_t y, uint16_t width, uint16_t height, cairo_t *cr)
+{
+    if(c->titlebar[bar].drawable == NULL
+            || c->titlebar[bar].drawable->pixmap == XCB_NONE
+            || !c->titlebar[bar].drawable->refreshed)
+        return;
+
+    /* Is the titlebar part of the area that should get redrawn? */
+    area_t area = titlebar_get_area(c, bar);
+    area_t dirty_area = { .x = x, .y = y, .width = width, .height = height };
+    if (!area_intersect(&dirty_area, &area)) return;
+
+    cairo_save(cr);
+    cairo_rectangle(cr, dirty_area.x, dirty_area.y, dirty_area.width, dirty_area.height);
+    cairo_set_source_surface(cr, c->titlebar[bar].drawable->surface, area.x, area.y);
+    cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+    cairo_fill(cr);
+    cairo_restore(cr);
+}
+
+static void client_composite_partial(client_t *c, int16_t x, int16_t y, uint16_t width, uint16_t height, cairo_t *cr) {
+    int diff_left = c->titlebar[CLIENT_TITLEBAR_LEFT].size - c->titlebar[CLIENT_TITLEBAR_LEFT].overlap;
+    int diff_right = c->titlebar[CLIENT_TITLEBAR_RIGHT].size - c->titlebar[CLIENT_TITLEBAR_RIGHT].overlap;
+    int diff_top = c->titlebar[CLIENT_TITLEBAR_TOP].size - c->titlebar[CLIENT_TITLEBAR_TOP].overlap;
+    int diff_bottom = c->titlebar[CLIENT_TITLEBAR_BOTTOM].size - c->titlebar[CLIENT_TITLEBAR_BOTTOM].overlap;
+    area_t client_area = { .x = 0, .y = 0, .width = c->geometry.width - diff_left - diff_right, .height = c->geometry.height - diff_top - diff_bottom };
+    area_t dirty_area = { .x = x - diff_left, .y = y - diff_top, .width = width, .height = height };
+    if (!area_intersect(&dirty_area, &client_area)) return;
+
+    cairo_surface_t *client_surface = cairo_xcb_surface_create(
+        globalconf.connection, c->window, c->visualtype, client_area.width, client_area.height);
+    cairo_save(cr);
+    cairo_translate(cr, diff_left, diff_top);
+
+    lua_State *L = globalconf_get_lua_State();
+    luaA_object_push(L, c);
+    lua_pushlightuserdata(L, cr);
+    lua_pushlightuserdata(L, client_surface);
+    lua_pushinteger(L, dirty_area.x);
+    lua_pushinteger(L, dirty_area.y);
+    lua_pushinteger(L, dirty_area.width);
+    lua_pushinteger(L, dirty_area.height);
+    luaA_object_push(L, c->composite_cb);
+    luaA_dofunction(L, 7, 0);
+
+    cairo_surface_destroy(client_surface);
+}
+
 /**
  * Refresh all titlebars that are in the specified rectangle
  */
 void
 client_refresh_partial(client_t *c, int16_t x, int16_t y, uint16_t width, uint16_t height)
 {
-    for (client_titlebar_t bar = CLIENT_TITLEBAR_TOP; bar < CLIENT_TITLEBAR_COUNT; bar++) {
-        client_refresh_titlebar_partial(c, bar, x, y, width, height);
+    if (!c->composite_cb) {
+        for (client_titlebar_t bar = CLIENT_TITLEBAR_TOP; bar < CLIENT_TITLEBAR_COUNT; bar++) {
+            client_refresh_titlebar_partial(c, bar, x, y, width, height);
+        }
+    } else {
+        cairo_surface_t *frame_surface = cairo_xcb_surface_create(
+            globalconf.connection, c->frame_window, globalconf.visual, c->geometry.width, c->geometry.height);
+        cairo_surface_t *partial_surface =
+            cairo_surface_create_similar(frame_surface, CAIRO_CONTENT_COLOR_ALPHA, width, height);
+        cairo_t *cr;
+        cr = cairo_create(partial_surface);
+        cairo_translate(cr, -x, -y);
+        for (client_titlebar_t bar = CLIENT_TITLEBAR_TOP; bar < CLIENT_TITLEBAR_COUNT; bar++) {
+            client_composite_titlebar_partial(c, bar, x, y, width, height, cr);
+        }
+        client_composite_partial(c, x, y, width, height, cr);
+        cairo_surface_flush(partial_surface);
+        cairo_destroy(cr);
+        cr = cairo_create(frame_surface);
+        cairo_set_source_surface(cr, partial_surface, x, y);
+        cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+        cairo_rectangle(cr, x, y, width, height);
+        cairo_fill(cr);
+        cairo_destroy(cr);
+        cairo_surface_flush(frame_surface);
+        cairo_surface_destroy(partial_surface);
+        cairo_surface_destroy(frame_surface);
     }
 }
 
@@ -4269,6 +4379,91 @@ luaA_client_get_size_hints(lua_State *L, client_t *c)
     return 1;
 }
 
+/** Get the client's composite function.
+ * \param L The Lua VM state.
+ * \param client The client object.
+ * \return The number of elements pushed on stack.
+ */
+static int
+luaA_client_get_composite(lua_State *L, client_t *c)
+{
+    /* lua has to make sure to free the ref or we have a leak */
+    if (c->composite_cb)
+        luaA_object_push(L, c->composite_cb);
+    else
+        lua_pushnil(L);
+    return 1;
+}
+
+/** Set the client's composite function
+ * \param L The Lua VM state.
+ * \param client The client object.
+ * \return The number of elements pushed on stack.
+ */
+static int
+luaA_client_set_composite(lua_State *L, client_t *c)
+{
+    if (!globalconf.is_compositing) {
+        /* Maybe print out a warning? */
+        return 0;
+    }
+
+    void *composite_cb = NULL;
+    if(!lua_isnil(L, -1)) {
+        luaA_checkfunction(L, -1);
+        composite_cb = luaA_object_ref(L, -1);
+    }
+
+    if (!c->composite_cb) {
+        if (composite_cb) {
+            c->damage = xcb_generate_id(globalconf.connection);
+            xcb_composite_redirect_subwindows(globalconf.connection, c->frame_window, XCB_COMPOSITE_REDIRECT_MANUAL);
+            xcb_damage_create(globalconf.connection, c->damage, c->window, XCB_DAMAGE_REPORT_LEVEL_NON_EMPTY);
+        }
+    } else {
+        luaA_object_unref(L, c->composite_cb);
+        if (!composite_cb) {
+            xcb_composite_unredirect_subwindows(globalconf.connection, c->frame_window, XCB_COMPOSITE_REDIRECT_MANUAL);
+            xcb_damage_destroy(globalconf.connection, c->damage);
+            c->damage = XCB_NONE;
+        }
+    }
+    c->composite_cb = composite_cb;
+    return 0;
+}
+
+/** Invalidate an area of the client frame for redrawing.
+ *
+ * It is usually used for redrawing changes that affect the client composition, but not from the client.
+ *
+ * @tparam interger x
+ * @tparam interger y
+ * @tparam interger width
+ * @tparam interger height
+ * @method invalidate_frame
+ */
+static int
+luaA_client_invalidate_frame(lua_State *L)
+{
+    client_t *c = luaA_checkudata(L, 1, &client_class);
+    area_t client_area = {
+        .x = 0, .y = 0,
+        .width = c->geometry.width,
+        .height = c->geometry.height,
+    };
+    area_t area = {
+        .x = luaL_checkinteger(L, 2),
+        .y = luaL_checkinteger(L, 3),
+        .width = luaL_checkinteger(L, 4),
+        .height = luaL_checkinteger(L, 5),
+    };
+    if (area_intersect(&area, &client_area))
+        xcb_clear_area(globalconf.connection, true, c->frame_window,
+                       area.x, area.y, area.width, area.height);
+    return 0;
+}
+
+
 /** Get the client's child window bounding shape.
  * \param L The Lua VM state.
  * \param client The client object.
@@ -4626,6 +4821,7 @@ client_class_setup(lua_State *L)
         { "titlebar_right", luaA_client_titlebar_right },
         { "titlebar_bottom", luaA_client_titlebar_bottom },
         { "titlebar_left", luaA_client_titlebar_left },
+        { "invalidate_frame", luaA_client_invalidate_frame },
         { "get_icon", luaA_client_get_some_icon },
         { NULL, NULL }
     };
@@ -4765,6 +4961,10 @@ client_class_setup(lua_State *L)
                             (lua_class_propfunc_t) luaA_client_set_focusable,
                             (lua_class_propfunc_t) luaA_client_get_focusable,
                             (lua_class_propfunc_t) luaA_client_set_focusable);
+    luaA_class_add_property(&client_class, "composite",
+                            (lua_class_propfunc_t) luaA_client_set_composite,
+                            (lua_class_propfunc_t) luaA_client_get_composite,
+                            (lua_class_propfunc_t) luaA_client_set_composite);
     luaA_class_add_property(&client_class, "shape_bounding",
                             (lua_class_propfunc_t) luaA_client_set_shape_bounding,
                             (lua_class_propfunc_t) luaA_client_get_shape_bounding,

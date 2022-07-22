@@ -25,6 +25,8 @@
 #include "stack.h"
 #include "objects/window.h"
 
+#include <xcb/damage.h>
+
 #define CLIENT_SELECT_INPUT_EVENT_MASK (XCB_EVENT_MASK_STRUCTURE_NOTIFY \
                                         | XCB_EVENT_MASK_PROPERTY_CHANGE \
                                         | XCB_EVENT_MASK_FOCUS_CHANGE)
@@ -116,6 +118,10 @@ struct client_t
     /** Old window geometry currently configured in X11 */
     area_t x11_client_geometry;
     area_t x11_frame_geometry;
+    /** Damage handle */
+    xcb_damage_damage_t damage;
+    /** Lua composite callback */
+    void *composite_cb;
     /** Got a configure request and have to call client_send_configure() if its ignored? */
     bool got_configure_request;
     /** Startup ID */
